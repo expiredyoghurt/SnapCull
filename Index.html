@@ -1,0 +1,1914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#020617">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>SnapCull v2.2 — Photo Triage & Culling Studio</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & Plus Jakarta Sans -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <!-- Google Identity Services (OAuth 2.0 for Google Photos Picker API) -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        display: ['Plus Jakarta Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            overscroll-behavior-y: contain;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+        .card-stack-item {
+            touch-action: none;
+            will-change: transform, opacity;
+            transition: box-shadow 0.2s ease;
+        }
+        .card-animating {
+            transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease !important;
+        }
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .safe-top {
+            padding-top: max(0.75rem, env(safe-area-inset-top));
+        }
+        .safe-bottom {
+            padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+        }
+        .zoomable-img {
+            transform-origin: center center;
+            will-change: transform;
+        }
+        kbd {
+            font-family: 'Inter', monospace;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans h-[100dvh] flex flex-col overflow-hidden">
+
+    <!-- Top Navigation Bar -->
+    <header class="px-4 pb-3 safe-top bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 flex items-center justify-between z-30 shrink-0">
+        <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-sky-500/20">
+                <i class="ph-bold ph-images text-white text-xl"></i>
+            </div>
+            <div>
+                <div class="flex items-center gap-1.5">
+                    <h1 class="font-display font-bold text-base tracking-tight leading-none text-white">SnapCull</h1>
+                    <span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">v2.2</span>
+                </div>
+                <p id="source-subtitle" class="text-[11px] text-slate-400 font-medium mt-0.5">Google Photos • Smart Queue</p>
+            </div>
+        </div>
+
+        <!-- Source Switcher, Favorites & Cull Bin Pills -->
+        <div class="flex items-center gap-1.5 sm:gap-2">
+            <button id="btn-install-apk" onclick="triggerAndroidInstall()" class="hidden px-2.5 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 active:scale-95 transition text-xs font-semibold text-emerald-300 items-center gap-1 border border-emerald-500/40" title="Install Android App">
+                <i class="ph-bold ph-android-logo text-sm"></i>
+                <span class="hidden sm:inline">Install</span>
+            </button>
+
+            <button onclick="openSourceModal()" class="px-2.5 sm:px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-700 active:scale-95 transition text-xs font-medium text-slate-200 flex items-center gap-1.5 border border-slate-700/70">
+                <i id="source-icon" class="ph-fill ph-google-logo text-sky-400"></i>
+                <span id="source-label" class="hidden sm:inline">Source</span>
+                <i class="ph ph-caret-down text-slate-400 text-[10px]"></i>
+            </button>
+
+            <button onclick="switchTab('favorites')" class="relative px-2.5 sm:px-3 py-1.5 rounded-full bg-amber-500/15 hover:bg-amber-500/25 active:scale-95 transition text-xs font-semibold text-amber-300 flex items-center gap-1 border border-amber-500/30" title="View Starred Favorites">
+                <i class="ph-fill ph-star"></i>
+                <span id="fav-badge-count">0</span>
+            </button>
+
+            <button onclick="switchTab('trash')" class="relative px-2.5 sm:px-3 py-1.5 rounded-full bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 transition text-xs font-semibold text-rose-400 flex items-center gap-1 border border-rose-500/30" title="View Cull Bin">
+                <i class="ph-bold ph-trash"></i>
+                <span id="trash-badge-count">0</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Active Google Photos Picker Banner -->
+    <div id="picker-polling-banner" class="hidden px-4 py-2 bg-sky-500/15 border-b border-sky-500/30 flex items-center justify-between gap-2 text-xs text-sky-200 shrink-0">
+        <div class="flex items-center gap-2 min-w-0">
+            <i class="ph-bold ph-spinner animate-spin text-sky-400 shrink-0"></i>
+            <span id="picker-banner-text" class="truncate">Select photos in Google Photos tab — waiting for selection...</span>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="pollActivePickerSession(true)" class="px-2.5 py-1 rounded-lg bg-sky-500 text-slate-950 font-bold text-[11px] hover:bg-sky-400 transition">
+                Import Now
+            </button>
+            <button onclick="cancelPickerSession()" class="p-1 text-slate-400 hover:text-white" title="Cancel">
+                <i class="ph-bold ph-x text-xs"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Smart Filter Pills & Sort Toggle -->
+    <div id="filter-bar" class="px-4 py-2.5 bg-slate-900/40 border-b border-slate-800/50 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+        <button onclick="toggleSortOrder()" id="btn-sort-toggle" class="px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition bg-sky-500/15 text-sky-300 border border-sky-500/30 hover:bg-sky-500/25 flex items-center gap-1 shrink-0" title="Toggle Sort Order">
+            <i class="ph-bold ph-arrows-down-up text-sky-400"></i>
+            <span id="sort-label">Smart</span>
+        </button>
+
+        <div class="w-px h-4 bg-slate-800 shrink-0"></div>
+
+        <button onclick="setFilter('all')" data-filter="all" class="filter-btn active px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition bg-white text-slate-950 shadow-sm flex items-center gap-1.5">
+            <span>All</span>
+            <span id="count-all" class="px-1.5 py-0.2 rounded-full bg-slate-950/15 text-[10px] font-bold">0</span>
+        </button>
+        <button onclick="setFilter('blurry')" data-filter="blurry" class="filter-btn px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition bg-slate-800/80 text-slate-300 hover:bg-slate-800 flex items-center gap-1.5">
+            <i class="ph ph-aperture text-amber-400"></i>
+            <span>Blurry</span>
+            <span id="count-blurry" class="px-1.5 py-0.2 rounded-full bg-slate-950/60 text-[10px] font-bold text-slate-400">0</span>
+        </button>
+        <button onclick="setFilter('duplicates')" data-filter="duplicates" class="filter-btn px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition bg-slate-800/80 text-slate-300 hover:bg-slate-800 flex items-center gap-1.5">
+            <i class="ph ph-copy text-purple-400"></i>
+            <span>Burst</span>
+            <span id="count-duplicates" class="px-1.5 py-0.2 rounded-full bg-slate-950/60 text-[10px] font-bold text-slate-400">0</span>
+        </button>
+        <button onclick="setFilter('screenshots')" data-filter="screenshots" class="filter-btn px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition bg-slate-800/80 text-slate-300 hover:bg-slate-800 flex items-center gap-1.5">
+            <i class="ph ph-device-mobile text-emerald-400"></i>
+            <span>Screenshots</span>
+            <span id="count-screenshots" class="px-1.5 py-0.2 rounded-full bg-slate-950/60 text-[10px] font-bold text-slate-400">0</span>
+        </button>
+        <button onclick="setFilter('large')" data-filter="large" class="filter-btn px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition bg-slate-800/80 text-slate-300 hover:bg-slate-800 flex items-center gap-1.5">
+            <i class="ph ph-hard-drives text-sky-400"></i>
+            <span>Heavy (&gt;5MB)</span>
+            <span id="count-large" class="px-1.5 py-0.2 rounded-full bg-slate-950/60 text-[10px] font-bold text-slate-400">0</span>
+        </button>
+    </div>
+
+    <!-- MAIN VIEWPORT: Triage Deck, Favorites Gallery OR Cull Bin -->
+    <main class="flex-1 relative overflow-hidden flex flex-col">
+
+        <!-- VIEW 1: SWIPE TRIAGE STUDIO -->
+        <div id="view-triage" class="flex-1 flex flex-col justify-between p-4 max-w-lg w-full mx-auto h-full">
+
+            <!-- Progress & Storage Saved Mini-Bar -->
+            <div class="flex items-center justify-between text-xs text-slate-400 mb-2 px-1">
+                <div class="flex items-center gap-2">
+                    <span id="queue-progress-text" class="font-medium text-slate-300">1 of 6</span>
+                    <span class="text-slate-600">•</span>
+                    <span id="current-source-tag" class="text-sky-400 font-medium truncate max-w-[140px]">Google Photos</span>
+                </div>
+                <div class="flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                    <i class="ph-fill ph-sparkle text-[11px]"></i>
+                    <span id="space-saved-mini" class="font-semibold">0.0 MB</span> freed
+                </div>
+            </div>
+
+            <!-- Card Stack Container -->
+            <div id="card-stage" class="relative flex-1 w-full my-1 flex items-center justify-center">
+                <!-- Cards injected dynamically via JS -->
+            </div>
+
+            <!-- Burst Cluster Macro Bar -->
+            <div id="burst-macro-bar" class="hidden mt-2 p-2.5 rounded-2xl bg-purple-950/70 border border-purple-500/40 backdrop-blur-md flex items-center justify-between gap-2 shrink-0">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="w-7 h-7 rounded-lg bg-purple-500/25 text-purple-300 flex items-center justify-center shrink-0">
+                        <i class="ph-bold ph-stack text-sm"></i>
+                    </span>
+                    <div class="min-w-0">
+                        <p id="burst-cluster-title" class="text-xs font-bold text-white truncate">Burst Cluster (2 shots)</p>
+                        <p class="text-[10px] text-purple-300 truncate">Auto-keeps sharpest shot &amp; culls duplicates</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button onclick="toggleBurstCompare()" id="btn-burst-compare" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-purple-200 border border-purple-500/30 transition">
+                        Compare
+                    </button>
+                    <button onclick="keepBestAndCullRest()" class="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-[11px] shadow-md transition">
+                        Keep Best
+                    </button>
+                </div>
+            </div>
+
+            <!-- Action Controls Bar -->
+            <div class="pt-3 safe-bottom flex flex-col items-center gap-2.5 shrink-0">
+                <div class="flex items-center justify-center gap-4 w-full">
+                    <!-- Undo Button -->
+                    <button id="btn-undo" onclick="undoLastAction()" disabled class="w-12 h-12 rounded-full bg-slate-800/90 border border-slate-700 text-slate-300 flex items-center justify-center shadow-lg active:scale-90 transition disabled:opacity-35 disabled:pointer-events-none" title="Undo last swipe (Z)">
+                        <i class="ph-bold ph-arrow-u-up-left text-xl"></i>
+                    </button>
+
+                    <!-- Trash / Cull Button (Swipe Left / ArrowLeft) -->
+                    <button onclick="triggerSwipe('left')" class="w-16 h-16 rounded-full bg-gradient-to-br from-rose-500 to-red-600 text-white flex items-center justify-center shadow-xl shadow-rose-600/25 active:scale-90 hover:brightness-110 transition" title="Cull / Delete (Left Arrow)">
+                        <i class="ph-bold ph-x text-3xl"></i>
+                    </button>
+
+                    <!-- Favorite / Star Button (Swipe Up / ArrowUp) -->
+                    <button onclick="triggerSwipe('up')" class="w-12 h-12 rounded-full bg-slate-800/90 border border-amber-500/40 text-amber-400 flex items-center justify-center shadow-lg active:scale-90 hover:bg-amber-500/10 transition" title="Keep & Favorite (Up Arrow)">
+                        <i class="ph-fill ph-star text-xl"></i>
+                    </button>
+
+                    <!-- Keep Button (Swipe Right / ArrowRight) -->
+                    <button onclick="triggerSwipe('right')" class="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 text-white flex items-center justify-center shadow-xl shadow-emerald-600/25 active:scale-90 hover:brightness-110 transition" title="Keep Photo (Right Arrow)">
+                        <i class="ph-bold ph-heart text-3xl"></i>
+                    </button>
+
+                    <!-- Inspect EXIF / Details Button -->
+                    <button onclick="toggleExifModal()" class="w-12 h-12 rounded-full bg-slate-800/90 border border-slate-700 text-slate-300 flex items-center justify-center shadow-lg active:scale-90 transition" title="Photo Details (I)">
+                        <i class="ph-bold ph-info text-xl"></i>
+                    </button>
+                </div>
+
+                <!-- Gesture & Windows Arrow Key Hint Legend -->
+                <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-500 font-medium">
+                    <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-rose-400">←</kbd> Cull</span>
+                    <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-amber-300">↑</kbd> Favorite</span>
+                    <span class="flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-emerald-400">→</kbd> Keep</span>
+                    <span class="hidden sm:flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-sky-400">Z</kbd> Undo</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW 2: FAVORITES / KEEPERS GALLERY -->
+        <div id="view-favorites" class="hidden flex-1 flex-col max-w-2xl w-full mx-auto h-full overflow-hidden">
+            <div class="p-4 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between shrink-0">
+                <div>
+                    <h2 class="font-display font-bold text-lg text-white flex items-center gap-2">
+                        <i class="ph-fill ph-star text-amber-400"></i> Starred Favorites
+                    </h2>
+                    <p class="text-xs text-slate-400 mt-0.5">
+                        <span id="fav-summary-count" class="text-amber-300 font-semibold">0 photos</span> highlighted as your best shots
+                    </p>
+                </div>
+                <button onclick="switchTab('triage')" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white flex items-center gap-1.5 transition">
+                    <i class="ph-bold ph-cards"></i> Back to Swipe
+                </button>
+            </div>
+
+            <div id="fav-grid" class="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
+                <!-- Favorited thumbnails injected here -->
+            </div>
+
+            <div id="fav-empty-state" class="hidden flex-1 flex-col items-center justify-center p-8 text-center">
+                <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-3 text-amber-400">
+                    <i class="ph-fill ph-star text-3xl"></i>
+                </div>
+                <h3 class="font-display font-semibold text-base text-slate-200">No Starred Favorites Yet</h3>
+                <p class="text-xs text-slate-400 max-w-xs mt-1">Swipe <strong>Up</strong> (or press <kbd class="px-1 py-0.5 rounded bg-slate-800 text-amber-300">↑</kbd>) on your sharpest shots to collect them here.</p>
+                <button onclick="switchTab('triage')" class="mt-4 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-xs font-bold text-slate-950 transition">
+                    Start Curating
+                </button>
+            </div>
+        </div>
+
+        <!-- VIEW 3: CULL BIN / REVIEW & BATCH DELETE -->
+        <div id="view-trash" class="hidden flex-1 flex-col max-w-2xl w-full mx-auto h-full overflow-hidden">
+            <div class="p-4 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between shrink-0">
+                <div>
+                    <h2 class="font-display font-bold text-lg text-white">Review Cull Bin</h2>
+                    <p class="text-xs text-slate-400 mt-0.5">
+                        <span id="trash-summary-count" class="text-rose-400 font-semibold">0 photos</span> selected • Reclaim <span id="trash-summary-size" class="text-emerald-400 font-semibold">0.0 MB</span>
+                    </p>
+                </div>
+                <button onclick="switchTab('triage')" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white flex items-center gap-1.5 transition">
+                    <i class="ph-bold ph-cards"></i> Back to Swipe
+                </button>
+            </div>
+
+            <div id="trash-grid" class="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
+                <!-- Culled thumbnails injected here -->
+            </div>
+
+            <div id="trash-empty-state" class="hidden flex-1 flex-col items-center justify-center p-8 text-center">
+                <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-3 text-slate-500">
+                    <i class="ph ph-check-circle text-3xl text-emerald-500"></i>
+                </div>
+                <h3 class="font-display font-semibold text-base text-slate-200">Your Cull Bin is Empty</h3>
+                <p class="text-xs text-slate-400 max-w-xs mt-1">Swipe left (or press <kbd class="px-1 py-0.5 rounded bg-slate-800 text-rose-400">←</kbd>) on blurry shots, duplicates, or old screenshots to queue them safely for deletion.</p>
+                <button onclick="switchTab('triage')" class="mt-4 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-xs font-semibold text-white transition">
+                    Start Sorting Photos
+                </button>
+            </div>
+
+            <div id="trash-footer" class="p-4 safe-bottom bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                <button onclick="restoreAllFromTrash()" class="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 transition">
+                    Restore All
+                </button>
+                <button onclick="executePermanentCull()" class="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-semibold text-sm shadow-lg shadow-rose-600/25 flex items-center justify-center gap-2 active:scale-98 transition">
+                    <i class="ph-bold ph-trash"></i>
+                    <span id="btn-delete-label">Delete 0 Photos Forever</span>
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- SOURCE CONNECTION MODAL (Mobile Camera Roll + Windows Folder + Google Photos Picker OAuth 2.0) -->
+    <div id="source-modal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm hidden items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl transform transition-all max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center">
+                        <i class="ph-bold ph-cloud-arrow-down text-lg"></i>
+                    </div>
+                    <h3 class="font-display font-bold text-lg text-white">Photo Sources</h3>
+                </div>
+                <button onclick="closeSourceModal()" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="ph-bold ph-x"></i>
+                </button>
+            </div>
+
+            <p class="text-xs text-slate-400 mb-4 leading-relaxed">
+                Load photos from your Android camera roll or Windows folder (with automatic on-device blur &amp; resolution scoring), or sign in with Google Photos Picker OAuth 2.0.
+            </p>
+
+            <div class="space-y-3">
+                <!-- Option 1A: Mobile / Multi-File Photo Picker -->
+                <label class="block cursor-pointer group">
+                    <input type="file" id="mobile-file-input" multiple accept="image/*" class="hidden" onchange="handleLocalFilesUpload(event)">
+                    <div class="p-4 rounded-2xl bg-slate-800/70 hover:bg-slate-800 border border-slate-700/80 group-hover:border-sky-500/50 transition flex items-center justify-between">
+                        <div class="flex items-center gap-3.5">
+                            <div class="w-11 h-11 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
+                                <i class="ph-fill ph-device-mobile-camera text-2xl"></i>
+                            </div>
+                            <div>
+                                <div class="font-semibold text-sm text-white flex items-center gap-2">
+                                    Device Camera Roll / Photos
+                                    <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold">ON-DEVICE AI</span>
+                                </div>
+                                <p class="text-xs text-slate-400 mt-0.5">Select multiple photos • Auto-detects blur &amp; size</p>
+                            </div>
+                        </div>
+                        <i class="ph-bold ph-plus-circle text-xl text-slate-400 group-hover:text-sky-400"></i>
+                    </div>
+                </label>
+
+                <!-- Option 1B: Desktop Folder Batch Picker (Windows / macOS) -->
+                <label class="block cursor-pointer group">
+                    <input type="file" id="desktop-folder-input" webkitdirectory directory multiple accept="image/*" class="hidden" onchange="handleLocalFilesUpload(event)">
+                    <div class="p-3.5 rounded-2xl bg-slate-800/50 hover:bg-slate-800 border border-slate-700/60 group-hover:border-indigo-500/50 transition flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
+                                <i class="ph-fill ph-folder-open text-xl"></i>
+                            </div>
+                            <div>
+                                <div class="font-semibold text-xs text-white flex items-center gap-2">
+                                    Open Desktop Folder (Windows / PC)
+                                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold">BATCH</span>
+                                </div>
+                                <p class="text-[11px] text-slate-400 mt-0.5">Load an entire Pictures folder &amp; triage with <kbd class="px-1 py-0.2 rounded bg-slate-900 text-slate-300">←</kbd> <kbd class="px-1 py-0.2 rounded bg-slate-900 text-slate-300">→</kbd></p>
+                            </div>
+                        </div>
+                        <i class="ph-bold ph-arrow-square-out text-lg text-slate-400 group-hover:text-indigo-400"></i>
+                    </div>
+                </label>
+
+                <!-- Option 2: Google Photos Picker API OAuth 2.0 -->
+                <div class="p-4 rounded-2xl bg-slate-800/70 border border-slate-700/80 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3.5">
+                            <div class="w-11 h-11 rounded-xl bg-sky-500/15 text-sky-400 flex items-center justify-center shrink-0">
+                                <i class="ph-fill ph-google-logo text-2xl"></i>
+                            </div>
+                            <div>
+                                <div class="font-semibold text-sm text-white flex items-center gap-2">
+                                    Google Photos
+                                    <span id="gphotos-status-pill" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 font-bold">DEMO MODE</span>
+                                </div>
+                                <p id="gphotos-subtext" class="text-xs text-slate-400 mt-0.5">Sign in with Google to pick &amp; cull cloud photos</p>
+                            </div>
+                        </div>
+                        <button id="btn-gphotos-action" onclick="handleGooglePhotosAction()" class="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-xs font-bold text-slate-950 transition shrink-0">
+                            Pick Photos
+                        </button>
+                    </div>
+
+                    <!-- OAuth 2.0 Client ID Configuration + Native Token Fallback -->
+                    <div class="pt-3 border-t border-slate-700/60 space-y-2.5">
+                        <div class="flex items-center justify-between text-[11px] text-slate-400">
+                            <span class="font-medium text-slate-300">Google OAuth 2.0 Client ID</span>
+                            <div class="flex items-center gap-3">
+                                <button onclick="toggleTokenFallback()" class="text-emerald-400 hover:underline">Direct Token</button>
+                                <button onclick="toggleOAuthHelp()" class="text-sky-400 hover:underline">Setup Guide</button>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-2">
+                            <input type="text" id="google-client-id" placeholder="123456789-abc.apps.googleusercontent.com" class="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-sky-500">
+                            <button onclick="connectRealGooglePhotos()" class="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition shrink-0 flex items-center gap-1">
+                                <i class="ph-bold ph-sign-in"></i> Sign In
+                            </button>
+                        </div>
+
+                        <!-- Direct Access Token Input (Helpful for strict sideloaded/desktop shells) -->
+                        <div id="direct-token-box" class="hidden flex gap-2">
+                            <input type="password" id="google-direct-token" placeholder="Paste OAuth Bearer access token (ya29....)" class="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-500">
+                            <button onclick="applyDirectGoogleToken()" class="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs transition shrink-0">
+                                Connect
+                            </button>
+                        </div>
+
+                        <!-- Collapsible OAuth Setup Help -->
+                        <div id="oauth-help-box" class="hidden p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] text-slate-400 space-y-1.5 leading-relaxed">
+                            <p class="text-slate-200 font-semibold">Google Cloud OAuth Setup:</p>
+                            <ol class="list-decimal list-inside space-y-1">
+                                <li>Enable <strong>Google Photos Picker API</strong> in Google Cloud Console.</li>
+                                <li>Create an <strong>OAuth 2.0 Client ID</strong> (Web application).</li>
+                                <li>Add <code id="current-origin-display" class="text-sky-400 select-all"></code> (and <code class="text-sky-400">http://localhost:43821</code> for Windows `.exe`) to <strong>Authorized JavaScript origins</strong>.</li>
+                                <li>Paste the Client ID above and tap <strong>Sign In</strong>.</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Option 3: Reset Demo Library -->
+                <div class="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center shrink-0">
+                            <i class="ph-fill ph-arrows-clockwise text-lg"></i>
+                        </div>
+                        <div>
+                            <div class="font-semibold text-xs text-white">Sample Triage Deck</div>
+                            <p class="text-[11px] text-slate-400">Reload built-in demo photos</p>
+                        </div>
+                    </div>
+                    <button onclick="resetDemoLibrary()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 border border-slate-700 transition">
+                        Reset Deck
+                    </button>
+                </div>
+
+                <!-- Option 4: Play Store Privacy Policy -->
+                <div class="pt-1 flex items-center justify-between text-[11px] text-slate-500 px-1">
+                    <span>Play Store &amp; Privacy</span>
+                    <button onclick="togglePrivacyModal()" class="text-slate-400 hover:text-white underline">Privacy Policy &amp; Data Safety</button>
+                </div>
+            </div>
+
+            <button onclick="closeSourceModal()" class="w-full mt-5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition">
+                Done
+            </button>
+        </div>
+    </div>
+
+    <!-- PRIVACY POLICY MODAL -->
+    <div id="privacy-modal" class="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm hidden items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl max-h-[85vh] flex flex-col">
+            <div class="flex items-center justify-between mb-3 shrink-0">
+                <h3 class="font-display font-bold text-base text-white flex items-center gap-2">
+                    <i class="ph-fill ph-shield-check text-emerald-400"></i> Privacy Policy &amp; Data Safety
+                </h3>
+                <button onclick="togglePrivacyModal()" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="ph-bold ph-x"></i>
+                </button>
+            </div>
+            <div class="space-y-3 text-xs text-slate-300 overflow-y-auto pr-1 leading-relaxed">
+                <p><strong>1. Zero Cloud Upload of Local Photos:</strong> All local camera roll or Windows folder triage, Canvas sharpness scoring, and swipe decisions happen locally on your device. SnapCull never uploads your local photos to third-party servers.</p>
+                <p><strong>2. Google Photos Picker API:</strong> When you sign in with Google, SnapCull uses OAuth 2.0 (<code>photospicker.mediaitems.readonly</code>) strictly to let you pick photos in Google's official Picker UI and triage them in your session.</p>
+                <p><strong>3. Safe Cull Bin Review:</strong> Swiping left or pressing <kbd class="px-1 py-0.2 rounded bg-slate-800 text-rose-400">←</kbd> moves photos into the Cull Bin first. Nothing is permanently removed until you tap <em>Delete Forever</em>.</p>
+            </div>
+            <button onclick="togglePrivacyModal()" class="w-full mt-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white shrink-0">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <!-- EXIF / PHOTO METADATA INSPECTOR MODAL -->
+    <div id="exif-modal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm hidden items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-display font-bold text-base text-white flex items-center gap-2">
+                    <i class="ph-fill ph-camera text-sky-400"></i> Photo Intelligence &amp; EXIF
+                </h3>
+                <button onclick="toggleExifModal()" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="ph-bold ph-x"></i>
+                </button>
+            </div>
+            <div id="exif-content" class="space-y-3 text-xs">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- CUSTOM TOAST NOTIFICATION -->
+    <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 pointer-events-none opacity-0 transition-all duration-300 transform -translate-y-2">
+        <div class="px-4 py-2.5 rounded-full bg-slate-800/95 border border-slate-700 shadow-2xl text-xs font-semibold text-white flex items-center gap-2 backdrop-blur-md">
+            <i id="toast-icon" class="ph-fill ph-check-circle text-emerald-400 text-base"></i>
+            <span id="toast-message">Action completed</span>
+        </div>
+    </div>
+
+    <script>
+        // =========================================================================
+        // 1. SAMPLE LIBRARY & APPLICATION STATE
+        // =========================================================================
+        const samplePhotos = [
+            {
+                id: 'gp-101',
+                title: 'IMG_4821_BURST04.JPG',
+                source: 'Google Photos (Demo)',
+                category: 'duplicates',
+                burstGroup: 'marina-bay-sunset',
+                sharpness: 64,
+                badge: 'Similar Burst (1 of 2)',
+                badgeColor: 'bg-purple-500/90 text-white',
+                sizeMB: 4.8,
+                date: 'Nov 14, 2026 • 4:18 PM',
+                location: 'Marina Bay Sands, Singapore',
+                dimensions: '4032 × 3024',
+                camera: 'Pixel 9 Pro • f/1.7 • 1/250s • ISO 64',
+                aiScore: 'Sharpness 64/100 • Slightly softer than Burst Anchor',
+                url: 'https://images.unsplash.com/photo-1525625293386-3f8f99389edd?auto=format&fit=crop&w=900&q=70'
+            },
+            {
+                id: 'gp-105',
+                title: 'IMG_4822_BURST05_BEST.JPG',
+                source: 'Google Photos (Demo)',
+                category: 'duplicates',
+                burstGroup: 'marina-bay-sunset',
+                sharpness: 92,
+                badge: 'Similar Burst (2 of 2 • Sharpest)',
+                badgeColor: 'bg-purple-500/90 text-white',
+                sizeMB: 5.1,
+                date: 'Nov 14, 2026 • 4:18 PM',
+                location: 'Marina Bay Sands, Singapore',
+                dimensions: '4032 × 3024',
+                camera: 'Pixel 9 Pro • f/1.7 • 1/320s • ISO 64',
+                aiScore: 'Sharpness 92/100 • Recommended Burst Keeper',
+                url: 'https://images.unsplash.com/photo-1525625293386-3f8f99389edd?auto=format&fit=crop&w=900&q=95'
+            },
+            {
+                id: 'gp-102',
+                title: 'IMG_4790_MOTION.JPG',
+                source: 'Google Photos (Demo)',
+                category: 'blurry',
+                sharpness: 28,
+                badge: 'Motion Blur Detected',
+                badgeColor: 'bg-amber-500/90 text-slate-950',
+                sizeMB: 6.2,
+                date: 'Nov 12, 2026 • 9:42 PM',
+                location: 'Orchard Road, Singapore',
+                dimensions: '4032 × 3024',
+                camera: 'iPhone 16 Pro • f/1.8 • 1/15s • ISO 1600',
+                aiScore: 'Low Sharpness Score (28/100)',
+                url: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=900&q=60'
+            },
+            {
+                id: 'gp-103',
+                title: 'Screenshot_20261110-1402.png',
+                source: 'Mobile Camera Roll',
+                category: 'screenshots',
+                sharpness: 98,
+                badge: 'Receipt / Screenshot',
+                badgeColor: 'bg-emerald-500/90 text-slate-950',
+                sizeMB: 1.4,
+                date: 'Nov 10, 2026 • 2:02 PM',
+                location: 'Local Device Storage',
+                dimensions: '1179 × 2556',
+                camera: 'Screen Capture • PNG',
+                aiScore: 'Temporary Boarding Pass / Receipt',
+                url: 'https://images.unsplash.com/photo-1555421689-491a97ff2040?auto=format&fit=crop&w=900&q=80'
+            },
+            {
+                id: 'gp-104',
+                title: 'PXL_20261108_RAW_091.DNG',
+                source: 'Google Photos (Demo)',
+                category: 'large',
+                sharpness: 95,
+                badge: 'Large RAW File (18.4 MB)',
+                badgeColor: 'bg-sky-500/90 text-slate-950',
+                sizeMB: 18.4,
+                date: 'Nov 08, 2026 • 6:55 PM',
+                location: 'Gardens by the Bay',
+                dimensions: '8064 × 6048',
+                camera: 'Pixel 9 Pro • 50MP RAW • f/1.7',
+                aiScore: 'High Storage Impact (>5MB)',
+                url: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=900&q=85'
+            },
+            {
+                id: 'gp-106',
+                title: 'IMG_4599_OUT_OF_FOCUS.JPG',
+                source: 'Mobile Camera Roll',
+                category: 'blurry',
+                sharpness: 22,
+                badge: 'Out of Focus',
+                badgeColor: 'bg-amber-500/90 text-slate-950',
+                sizeMB: 5.1,
+                date: 'Nov 02, 2026 • 8:15 PM',
+                location: 'Sentosa Beach',
+                dimensions: '4032 × 3024',
+                camera: 'iPhone 16 Pro • Night Mode 3s',
+                aiScore: 'Subject Focus Missed (22/100)',
+                url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=900&q=70'
+            }
+        ];
+
+        let state = {
+            photos: [...samplePhotos],
+            activeFilter: 'all',
+            sortOrder: 'smart', // 'smart' | 'largest'
+            decisions: {},
+            history: [],
+            currentTab: 'triage',
+            burstCompareActive: false,
+            oauthAccessToken: null,
+            activePickerSession: null,
+            pickerPollInterval: null
+        };
+
+        // =========================================================================
+        // 2. FILTERING, SORTING & QUEUE COMPUTATION
+        // =========================================================================
+        function getFilteredPhotos() {
+            const list = state.photos.filter(p => {
+                if (state.activeFilter === 'all') return true;
+                return p.category === state.activeFilter;
+            });
+
+            if (state.sortOrder === 'largest') {
+                return [...list].sort((a, b) => b.sizeMB - a.sizeMB);
+            }
+            return list;
+        }
+
+        function getPendingQueue() {
+            return getFilteredPhotos().filter(p => !state.decisions[p.id]);
+        }
+
+        function getTrashedPhotos() {
+            return state.photos.filter(p => state.decisions[p.id] === 'trash');
+        }
+
+        function getFavoritePhotos() {
+            return state.photos.filter(p => state.decisions[p.id] === 'favorite');
+        }
+
+        function getTotalSavedMB() {
+            return getTrashedPhotos().reduce((sum, p) => sum + p.sizeMB, 0);
+        }
+
+        function getBurstPeers(photo) {
+            if (!photo || !photo.burstGroup) return [];
+            return state.photos.filter(p => p.burstGroup === photo.burstGroup && !state.decisions[p.id]);
+        }
+
+        function toggleSortOrder() {
+            state.sortOrder = state.sortOrder === 'smart' ? 'largest' : 'smart';
+            document.getElementById('sort-label').textContent = state.sortOrder === 'largest' ? 'Largest First' : 'Smart';
+            showToast(
+                state.sortOrder === 'largest' ? 'Sorted by Largest File Size First' : 'Sorted by Smart Queue',
+                'ph-arrows-down-up text-sky-400'
+            );
+            renderCardStack();
+        }
+
+        // =========================================================================
+        // 3. UI RENDERING, BURST COMPARISON & CARD STACK ENGINE
+        // =========================================================================
+        function updateMetrics() {
+            const trashed = getTrashedPhotos();
+            const favorites = getFavoritePhotos();
+            const savedMB = getTotalSavedMB().toFixed(1);
+            const filtered = getFilteredPhotos();
+            const pending = getPendingQueue();
+
+            document.getElementById('trash-badge-count').textContent = trashed.length;
+            document.getElementById('fav-badge-count').textContent = favorites.length;
+            document.getElementById('space-saved-mini').textContent = `${savedMB} MB`;
+
+            const pendingAll = state.photos.filter(p => !state.decisions[p.id]);
+            document.getElementById('count-all').textContent = pendingAll.length;
+            ['blurry', 'duplicates', 'screenshots', 'large'].forEach(cat => {
+                const el = document.getElementById(`count-${cat}`);
+                if (el) {
+                    const count = pendingAll.filter(p => p.category === cat).length;
+                    el.textContent = count;
+                }
+            });
+
+            const reviewedInFilter = filtered.length - pending.length;
+            const currentIndex = pending.length > 0 ? reviewedInFilter + 1 : filtered.length;
+            document.getElementById('queue-progress-text').textContent =
+                filtered.length === 0 ? '0 photos' : `${Math.min(currentIndex, filtered.length)} of ${filtered.length}`;
+
+            if (pending.length > 0) {
+                document.getElementById('current-source-tag').textContent = pending[0].source;
+            }
+
+            document.getElementById('btn-undo').disabled = state.history.length === 0;
+            document.getElementById('trash-summary-count').textContent = `${trashed.length} photo${trashed.length === 1 ? '' : 's'}`;
+            document.getElementById('trash-summary-size').textContent = `${savedMB} MB`;
+            document.getElementById('btn-delete-label').textContent = `Delete ${trashed.length} Photo${trashed.length === 1 ? '' : 's'} Forever`;
+            document.getElementById('fav-summary-count').textContent = `${favorites.length} photo${favorites.length === 1 ? '' : 's'}`;
+        }
+
+        function renderCardStack() {
+            const stage = document.getElementById('card-stage');
+            const burstBar = document.getElementById('burst-macro-bar');
+            stage.innerHTML = '';
+
+            const pending = getPendingQueue();
+            updateMetrics();
+
+            if (pending.length === 0) {
+                burstBar.classList.add('hidden');
+                const keptCount = state.photos.filter(p => state.decisions[p.id] === 'keep' || state.decisions[p.id] === 'favorite').length;
+                const favCount = getFavoritePhotos().length;
+                const culledCount = getTrashedPhotos().length;
+
+                stage.innerHTML = `
+                    <div class="w-full h-full rounded-3xl bg-slate-900/80 border border-slate-800 flex flex-col items-center justify-center p-6 text-center overflow-y-auto">
+                        <div class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500/20 to-sky-500/20 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mb-3 shadow-inner">
+                            <i class="ph-fill ph-confetti text-3xl"></i>
+                        </div>
+                        <h3 class="font-display font-bold text-xl text-white">Triage Sprint Complete!</h3>
+                        <p class="text-xs text-slate-400 max-w-xs mt-1">Here is your session recap for this queue:</p>
+
+                        <div class="grid grid-cols-3 gap-2.5 w-full max-w-xs my-5">
+                            <div class="p-3 rounded-2xl bg-slate-950/90 border border-slate-800">
+                                <div class="text-lg font-display font-extrabold text-emerald-400">${keptCount}</div>
+                                <div class="text-[10px] text-slate-400 font-medium mt-0.5">Kept</div>
+                            </div>
+                            <div class="p-3 rounded-2xl bg-slate-950/90 border border-slate-800">
+                                <div class="text-lg font-display font-extrabold text-amber-400">${favCount}</div>
+                                <div class="text-[10px] text-slate-400 font-medium mt-0.5">Starred</div>
+                            </div>
+                            <div class="p-3 rounded-2xl bg-slate-950/90 border border-slate-800">
+                                <div class="text-lg font-display font-extrabold text-rose-400">${culledCount}</div>
+                                <div class="text-[10px] text-slate-400 font-medium mt-0.5">Culled</div>
+                            </div>
+                        </div>
+
+                        <div class="px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-xs text-emerald-300 font-semibold mb-5">
+                            Ready to reclaim ${getTotalSavedMB().toFixed(1)} MB of storage
+                        </div>
+
+                        <div class="flex flex-wrap items-center justify-center gap-2.5">
+                            <button onclick="switchTab('trash')" class="px-4 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold shadow-lg shadow-rose-500/20 transition">
+                                Review Cull Bin (${culledCount})
+                            </button>
+                            <button onclick="openSourceModal()" class="px-4 py-2.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-xs font-semibold transition">
+                                Import More Photos
+                            </button>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            const topPhoto = pending[0];
+            const burstPeers = getBurstPeers(topPhoto);
+            if (burstPeers.length > 1) {
+                burstBar.classList.remove('hidden');
+                document.getElementById('burst-cluster-title').textContent = `Burst Cluster (${burstPeers.length} similar shots)`;
+                document.getElementById('btn-burst-compare').textContent = state.burstCompareActive ? 'Single View' : '2-Up Compare';
+            } else {
+                burstBar.classList.add('hidden');
+                state.burstCompareActive = false;
+            }
+
+            const visibleCards = pending.slice(0, 3).reverse();
+
+            visibleCards.forEach((photo, revIdx) => {
+                const stackIndex = visibleCards.length - 1 - revIdx;
+                const isTop = stackIndex === 0;
+
+                const card = document.createElement('div');
+                card.className = `card-stack-item absolute inset-0 rounded-3xl overflow-hidden bg-slate-900 border border-slate-700/80 shadow-2xl flex flex-col justify-between select-none`;
+                card.dataset.id = photo.id;
+
+                const scale = 1 - stackIndex * 0.04;
+                const translateY = stackIndex * 10;
+                const opacity = 1 - stackIndex * 0.25;
+                card.style.transform = `translate3d(0, ${translateY}px, 0) scale(${scale})`;
+                card.style.opacity = opacity;
+                card.style.zIndex = 20 - stackIndex;
+
+                const anchorPhoto = isTop && state.burstCompareActive && burstPeers.length > 1
+                    ? [...burstPeers].sort((a, b) => (b.sharpness || 50) - (a.sharpness || 50))[0]
+                    : null;
+
+                const mediaHtml = anchorPhoto && anchorPhoto.id !== photo.id
+                    ? `
+                        <div class="absolute inset-0 grid grid-cols-2 divide-x-2 divide-purple-400/70 pointer-events-none">
+                            <div class="relative h-full overflow-hidden">
+                                <img src="${photo.url}" alt="${photo.title}" class="w-full h-full object-cover" />
+                                <span class="absolute bottom-24 left-2 px-2 py-0.5 rounded bg-slate-950/85 text-[10px] font-bold text-amber-300 border border-white/10">
+                                    Current (${photo.sharpness || 60}/100)
+                                </span>
+                            </div>
+                            <div class="relative h-full overflow-hidden">
+                                <img src="${anchorPhoto.url}" alt="${anchorPhoto.title}" class="w-full h-full object-cover" />
+                                <span class="absolute bottom-24 right-2 px-2 py-0.5 rounded bg-purple-600/90 text-[10px] font-bold text-white shadow">
+                                    Anchor (${anchorPhoto.sharpness || 90}/100)
+                                </span>
+                            </div>
+                        </div>
+                    `
+                    : `
+                        <img src="${photo.url}" alt="${photo.title}"
+                             onerror="this.src='https://placehold.co/800x1000/1e293b/94a3b8?text=Photo+Preview'"
+                             class="zoomable-img absolute inset-0 w-full h-full object-cover pointer-events-none" />
+                    `;
+
+                card.innerHTML = `
+                    ${mediaHtml}
+
+                    <div class="relative z-10 p-4 bg-gradient-to-b from-slate-950/80 via-slate-950/30 to-transparent flex items-start justify-between gap-2">
+                        <span class="px-3 py-1 rounded-full text-[11px] font-bold tracking-wide shadow-md ${photo.badgeColor}">
+                            ${photo.badge}
+                        </span>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" class="btn-zoom-toggle w-7 h-7 rounded-full bg-slate-950/75 backdrop-blur-md text-slate-200 border border-white/15 flex items-center justify-center hover:bg-slate-800 transition" title="Toggle 2.5× Loupe Zoom">
+                                <i class="ph-bold ph-magnifying-glass-plus text-xs"></i>
+                            </button>
+                            <span class="px-2.5 py-1 rounded-full bg-slate-950/75 backdrop-blur-md text-[11px] font-semibold text-slate-200 border border-white/10">
+                                ${photo.sizeMB.toFixed(1)} MB
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="stamp-keep opacity-0 pointer-events-none absolute top-16 left-6 z-20 border-4 border-emerald-400 text-emerald-400 font-display font-extrabold text-3xl px-4 py-1 rounded-xl -rotate-12 tracking-wider bg-slate-950/40 backdrop-blur-xs">
+                        KEEP
+                    </div>
+                    <div class="stamp-cull opacity-0 pointer-events-none absolute top-16 right-6 z-20 border-4 border-rose-500 text-rose-500 font-display font-extrabold text-3xl px-4 py-1 rounded-xl rotate-12 tracking-wider bg-slate-950/40 backdrop-blur-xs">
+                        CULL
+                    </div>
+                    <div class="stamp-fav opacity-0 pointer-events-none absolute bottom-28 left-1/2 -translate-x-1/2 z-20 border-4 border-amber-400 text-amber-400 font-display font-extrabold text-2xl px-4 py-1 rounded-xl tracking-wider bg-slate-950/50 backdrop-blur-xs">
+                        FAVORITE ★
+                    </div>
+
+                    <div class="relative z-10 p-5 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent pt-12 pointer-events-none">
+                        <div class="flex items-end justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="text-[11px] font-semibold text-sky-400 uppercase tracking-wider mb-0.5 flex items-center gap-1.5">
+                                    <i class="ph-fill ${photo.source.includes('Google') ? 'ph-google-logo' : 'ph-device-mobile'}"></i>
+                                    ${photo.source}
+                                </p>
+                                <h2 class="font-display font-bold text-base text-white truncate">${photo.title}</h2>
+                                <p class="text-xs text-slate-300 mt-0.5 truncate">${photo.date} • ${photo.location}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                if (isTop) {
+                    attachSwipeAndZoomPhysics(card, photo);
+                }
+
+                stage.appendChild(card);
+            });
+        }
+
+        function toggleBurstCompare() {
+            state.burstCompareActive = !state.burstCompareActive;
+            renderCardStack();
+        }
+
+        function keepBestAndCullRest() {
+            const pending = getPendingQueue();
+            if (pending.length === 0) return;
+            const peers = getBurstPeers(pending[0]);
+            if (peers.length < 2) return;
+
+            const sorted = [...peers].sort((a, b) => (b.sharpness || b.sizeMB) - (a.sharpness || a.sizeMB));
+            const best = sorted[0];
+            const rest = sorted.slice(1);
+
+            state.decisions[best.id] = 'favorite';
+            state.history.push({ photoId: best.id, previousDecision: null });
+
+            let freed = 0;
+            rest.forEach(p => {
+                state.decisions[p.id] = 'trash';
+                state.history.push({ photoId: p.id, previousDecision: null });
+                freed += p.sizeMB;
+            });
+
+            saveDecisionsToStorage();
+            state.burstCompareActive = false;
+            showToast(`Kept sharpest shot & culled ${rest.length} (${freed.toFixed(1)} MB)`, 'ph-sparkle text-purple-300');
+            renderCardStack();
+        }
+
+        // =========================================================================
+        // 4. PINCH-TO-ZOOM LOUPE + TOUCH & MOUSE SWIPE PHYSICS
+        // =========================================================================
+        function attachSwipeAndZoomPhysics(card, photo) {
+            let startX = 0, startY = 0;
+            let currentX = 0, currentY = 0;
+            let isDragging = false;
+
+            let zoomScale = 1;
+            let panX = 0, panY = 0;
+            let lastPanX = 0, lastPanY = 0;
+            let initialPinchDist = 0;
+            let initialPinchScale = 1;
+            let lastTapTime = 0;
+
+            const zoomImg = card.querySelector('.zoomable-img');
+            const zoomBtn = card.querySelector('.btn-zoom-toggle');
+            const stampKeep = card.querySelector('.stamp-keep');
+            const stampCull = card.querySelector('.stamp-cull');
+            const stampFav  = card.querySelector('.stamp-fav');
+
+            const applyZoomTransform = (animate = false) => {
+                if (!zoomImg) return;
+                zoomImg.style.transition = animate ? 'transform 0.25s cubic-bezier(0.22, 1, 0.36, 1)' : 'none';
+                zoomImg.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoomScale})`;
+                if (zoomBtn) {
+                    zoomBtn.innerHTML = zoomScale > 1.05
+                        ? '<i class="ph-bold ph-magnifying-glass-minus text-xs text-sky-400"></i>'
+                        : '<i class="ph-bold ph-magnifying-glass-plus text-xs"></i>';
+                }
+            };
+
+            const toggleLoupeZoom = () => {
+                if (zoomScale > 1.05) {
+                    zoomScale = 1;
+                    panX = 0;
+                    panY = 0;
+                    lastPanX = 0;
+                    lastPanY = 0;
+                } else {
+                    zoomScale = 2.5;
+                }
+                applyZoomTransform(true);
+            };
+
+            if (zoomBtn) {
+                zoomBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleLoupeZoom();
+                });
+            }
+
+            const getPinchDistance = (touches) => {
+                const dx = touches[0].clientX - touches[1].clientX;
+                const dy = touches[0].clientY - touches[1].clientY;
+                return Math.hypot(dx, dy);
+            };
+
+            const onStart = (e) => {
+                if (card.classList.contains('card-animating')) return;
+                if (e.target.closest('.btn-zoom-toggle')) return;
+
+                if (e.touches && e.touches.length === 2 && zoomImg) {
+                    isDragging = false;
+                    initialPinchDist = getPinchDistance(e.touches);
+                    initialPinchScale = zoomScale;
+                    return;
+                }
+
+                const now = Date.now();
+                if (now - lastTapTime < 280 && (!e.touches || e.touches.length === 1)) {
+                    toggleLoupeZoom();
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+
+                isDragging = true;
+                const point = e.type.includes('mouse') ? e : e.touches[0];
+                startX = point.clientX;
+                startY = point.clientY;
+            };
+
+            const onMove = (e) => {
+                if (e.touches && e.touches.length === 2 && initialPinchDist > 0 && zoomImg) {
+                    const dist = getPinchDistance(e.touches);
+                    zoomScale = Math.min(4, Math.max(1, initialPinchScale * (dist / initialPinchDist)));
+                    if (zoomScale <= 1.02) {
+                        zoomScale = 1;
+                        panX = 0;
+                        panY = 0;
+                    }
+                    applyZoomTransform(false);
+                    return;
+                }
+
+                if (!isDragging) return;
+                const point = e.type.includes('mouse') ? e : e.touches[0];
+                const dx = point.clientX - startX;
+                const dy = point.clientY - startY;
+
+                if (zoomScale > 1.05) {
+                    panX = lastPanX + dx;
+                    panY = lastPanY + dy;
+                    applyZoomTransform(false);
+                    return;
+                }
+
+                currentX = dx;
+                currentY = dy;
+
+                const rotate = currentX * 0.05;
+                card.style.transform = `translate3d(${currentX}px, ${currentY}px, 0) rotate(${rotate}deg)`;
+
+                const threshold = 90;
+                if (currentX > 20) {
+                    stampKeep.style.opacity = Math.min(currentX / threshold, 1);
+                    stampCull.style.opacity = 0;
+                    stampFav.style.opacity = 0;
+                } else if (currentX < -20) {
+                    stampCull.style.opacity = Math.min(Math.abs(currentX) / threshold, 1);
+                    stampKeep.style.opacity = 0;
+                    stampFav.style.opacity = 0;
+                } else if (currentY < -35 && Math.abs(currentX) < 40) {
+                    stampFav.style.opacity = Math.min(Math.abs(currentY) / threshold, 1);
+                    stampKeep.style.opacity = 0;
+                    stampCull.style.opacity = 0;
+                } else {
+                    stampKeep.style.opacity = 0;
+                    stampCull.style.opacity = 0;
+                    stampFav.style.opacity = 0;
+                }
+            };
+
+            const onEnd = () => {
+                initialPinchDist = 0;
+                if (zoomScale > 1.05) {
+                    lastPanX = panX;
+                    lastPanY = panY;
+                    isDragging = false;
+                    return;
+                }
+
+                if (!isDragging) return;
+                isDragging = false;
+
+                const swipeThreshold = 100;
+                if (currentX > swipeThreshold) {
+                    completeSwipe(card, photo, 'right');
+                } else if (currentX < -swipeThreshold) {
+                    completeSwipe(card, photo, 'left');
+                } else if (currentY < -110 && Math.abs(currentX) < 60) {
+                    completeSwipe(card, photo, 'up');
+                } else {
+                    card.classList.add('card-animating');
+                    card.style.transform = 'translate3d(0, 0, 0) rotate(0deg)';
+                    stampKeep.style.opacity = 0;
+                    stampCull.style.opacity = 0;
+                    stampFav.style.opacity = 0;
+                    setTimeout(() => card.classList.remove('card-animating'), 350);
+                }
+                currentX = 0;
+                currentY = 0;
+            };
+
+            card.addEventListener('mousedown', onStart);
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onEnd);
+
+            card.addEventListener('touchstart', onStart, { passive: true });
+            card.addEventListener('touchmove', onMove, { passive: true });
+            card.addEventListener('touchend', onEnd);
+        }
+
+        function triggerSwipe(direction) {
+            const topCard = document.querySelector('#card-stage .card-stack-item');
+            const pending = getPendingQueue();
+            if (!topCard || pending.length === 0) return;
+
+            const photo = pending[0];
+            if (direction === 'right') topCard.querySelector('.stamp-keep').style.opacity = 1;
+            if (direction === 'left')  topCard.querySelector('.stamp-cull').style.opacity = 1;
+            if (direction === 'up')    topCard.querySelector('.stamp-fav').style.opacity = 1;
+
+            completeSwipe(topCard, photo, direction);
+        }
+
+        function completeSwipe(card, photo, direction) {
+            card.classList.add('card-animating');
+
+            let decision = 'keep';
+            let flyX = 0, flyY = 0, rot = 0;
+
+            if (direction === 'right') {
+                decision = 'keep';
+                flyX = window.innerWidth * 1.2;
+                rot = 22;
+            } else if (direction === 'left') {
+                decision = 'trash';
+                flyX = -window.innerWidth * 1.2;
+                rot = -22;
+            } else if (direction === 'up') {
+                decision = 'favorite';
+                flyY = -window.innerHeight * 1.1;
+                rot = 0;
+            }
+
+            if (navigator.vibrate) {
+                try { navigator.vibrate(10); } catch (e) {}
+            }
+
+            card.style.transform = `translate3d(${flyX}px, ${flyY}px, 0) rotate(${rot}deg)`;
+            card.style.opacity = '0';
+
+            state.history.push({
+                photoId: photo.id,
+                previousDecision: state.decisions[photo.id] || null
+            });
+            state.decisions[photo.id] = decision;
+            saveDecisionsToStorage();
+
+            setTimeout(() => {
+                renderCardStack();
+            }, 240);
+        }
+
+        function undoLastAction() {
+            if (state.history.length === 0) return;
+            const last = state.history.pop();
+            if (last.previousDecision === null) {
+                delete state.decisions[last.photoId];
+            } else {
+                state.decisions[last.photoId] = last.previousDecision;
+            }
+            saveDecisionsToStorage();
+            showToast('Undid last action', 'ph-arrow-u-up-left text-sky-400');
+            renderCardStack();
+        }
+
+        // =========================================================================
+        // 5. FILTERS, TABS, FAVORITES GALLERY & CULL BIN MANAGEMENT
+        // =========================================================================
+        function setFilter(filterName) {
+            state.activeFilter = filterName;
+
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                if (btn.dataset.filter === filterName) {
+                    btn.className = 'filter-btn active px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition bg-white text-slate-950 shadow-sm flex items-center gap-1.5';
+                } else {
+                    btn.className = 'filter-btn px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition bg-slate-800/80 text-slate-300 hover:bg-slate-800 flex items-center gap-1.5';
+                }
+            });
+
+            if (state.currentTab !== 'triage') {
+                switchTab('triage');
+            } else {
+                renderCardStack();
+            }
+        }
+
+        function switchTab(tab) {
+            state.currentTab = tab;
+            const triageView = document.getElementById('view-triage');
+            const favView = document.getElementById('view-favorites');
+            const trashView = document.getElementById('view-trash');
+            const filterBar = document.getElementById('filter-bar');
+
+            [triageView, favView, trashView].forEach(v => {
+                v.classList.add('hidden');
+                v.classList.remove('flex');
+            });
+
+            if (tab === 'triage') {
+                triageView.classList.remove('hidden');
+                triageView.classList.add('flex');
+                filterBar.classList.remove('hidden');
+                renderCardStack();
+            } else if (tab === 'favorites') {
+                favView.classList.remove('hidden');
+                favView.classList.add('flex');
+                filterBar.classList.add('hidden');
+                renderFavoritesBin();
+            } else {
+                trashView.classList.remove('hidden');
+                trashView.classList.add('flex');
+                filterBar.classList.add('hidden');
+                renderTrashBin();
+            }
+        }
+
+        function renderFavoritesBin() {
+            updateMetrics();
+            const favs = getFavoritePhotos();
+            const grid = document.getElementById('fav-grid');
+            const emptyState = document.getElementById('fav-empty-state');
+
+            grid.innerHTML = '';
+
+            if (favs.length === 0) {
+                grid.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                emptyState.classList.add('flex');
+                return;
+            }
+
+            grid.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+            emptyState.classList.remove('flex');
+
+            favs.forEach(photo => {
+                const item = document.createElement('div');
+                item.className = 'relative aspect-[4/5] rounded-2xl overflow-hidden bg-slate-900 border border-amber-500/30 group';
+                item.innerHTML = `
+                    <img src="${photo.url}" alt="${photo.title}" class="w-full h-full object-cover">
+                    <div class="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/40 p-2.5 flex flex-col justify-between">
+                        <div class="flex justify-between items-center">
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 flex items-center gap-1">
+                                <i class="ph-fill ph-star"></i> ${photo.sizeMB.toFixed(1)} MB
+                            </span>
+                            <div class="flex items-center gap-1">
+                                <button onclick="shareSinglePhoto('${photo.id}')" class="w-7 h-7 rounded-full bg-slate-900/90 text-sky-400 border border-white/10 flex items-center justify-center shadow active:scale-90 transition" title="Share Photo">
+                                    <i class="ph-bold ph-share-network text-xs"></i>
+                                </button>
+                                <button onclick="unfavoritePhoto('${photo.id}')" class="w-7 h-7 rounded-full bg-slate-900/90 text-slate-300 border border-white/10 flex items-center justify-center shadow active:scale-90 transition" title="Remove Star">
+                                    <i class="ph-bold ph-x text-xs"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <p class="text-[11px] font-medium text-white truncate">${photo.title}</p>
+                    </div>
+                `;
+                grid.appendChild(item);
+            });
+        }
+
+        function unfavoritePhoto(photoId) {
+            state.decisions[photoId] = 'keep';
+            saveDecisionsToStorage();
+            showToast('Moved from Favorites to Kept', 'ph-check-circle text-slate-300');
+            renderFavoritesBin();
+        }
+
+        async function shareSinglePhoto(photoId) {
+            const photo = state.photos.find(p => p.id === photoId);
+            if (!photo) return;
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: photo.title,
+                        text: `Curated with SnapCull (${photo.dimensions}, ${photo.sizeMB.toFixed(1)} MB)`,
+                        url: photo.url.startsWith('http') ? photo.url : window.location.href
+                    });
+                } catch (e) { /* User cancelled share */ }
+            } else {
+                showToast('Native sharing is available on mobile browsers', 'ph-share-network text-sky-400');
+            }
+        }
+
+        function renderTrashBin() {
+            updateMetrics();
+            const trashed = getTrashedPhotos();
+            const grid = document.getElementById('trash-grid');
+            const emptyState = document.getElementById('trash-empty-state');
+            const footer = document.getElementById('trash-footer');
+
+            grid.innerHTML = '';
+
+            if (trashed.length === 0) {
+                grid.classList.add('hidden');
+                footer.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                emptyState.classList.add('flex');
+                return;
+            }
+
+            grid.classList.remove('hidden');
+            footer.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+            emptyState.classList.remove('flex');
+
+            trashed.forEach(photo => {
+                const item = document.createElement('div');
+                item.className = 'relative aspect-[4/5] rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 group';
+                item.innerHTML = `
+                    <img src="${photo.url}" alt="${photo.title}" class="w-full h-full object-cover opacity-85 group-hover:opacity-100 transition">
+                    <div class="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/40 p-2.5 flex flex-col justify-between">
+                        <div class="flex justify-between items-center">
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-950/80 text-slate-300">
+                                ${photo.sizeMB.toFixed(1)} MB
+                            </span>
+                            <button onclick="restoreSinglePhoto('${photo.id}')" class="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow-lg active:scale-90 transition" title="Restore photo">
+                                <i class="ph-bold ph-arrow-counter-clockwise text-sm"></i>
+                            </button>
+                        </div>
+                        <p class="text-[11px] font-medium text-white truncate">${photo.title}</p>
+                    </div>
+                `;
+                grid.appendChild(item);
+            });
+        }
+
+        function restoreSinglePhoto(photoId) {
+            delete state.decisions[photoId];
+            saveDecisionsToStorage();
+            showToast('Photo restored to queue', 'ph-arrow-counter-clockwise text-emerald-400');
+            renderTrashBin();
+        }
+
+        function restoreAllFromTrash() {
+            getTrashedPhotos().forEach(p => {
+                delete state.decisions[p.id];
+            });
+            saveDecisionsToStorage();
+            showToast('All photos restored', 'ph-check-circle text-emerald-400');
+            renderTrashBin();
+        }
+
+        function executePermanentCull() {
+            const trashed = getTrashedPhotos();
+            if (trashed.length === 0) return;
+
+            const savedMB = getTotalSavedMB().toFixed(1);
+            const count = trashed.length;
+            const trashedIds = new Set(trashed.map(p => p.id));
+
+            if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+                try {
+                    const nativePaths = trashed.filter(p => p.nativeUri).map(p => p.nativeUri);
+                    if (nativePaths.length > 0 && window.Capacitor.Plugins?.Filesystem) {
+                        nativePaths.forEach(uri => window.Capacitor.Plugins.Filesystem.deleteFile({ path: uri }));
+                    }
+                } catch (err) {
+                    console.warn('Android MediaStore native delete fallback:', err);
+                }
+            }
+
+            state.photos = state.photos.filter(p => !trashedIds.has(p.id));
+            trashedIds.forEach(id => delete state.decisions[id]);
+            state.history = state.history.filter(h => !trashedIds.has(h.photoId));
+            saveDecisionsToStorage();
+
+            showToast(`Freed ${savedMB} MB (${count} photos removed)`, 'ph-sparkle text-emerald-400');
+            renderTrashBin();
+        }
+
+        function resetDemoLibrary() {
+            state.photos = [...samplePhotos];
+            state.decisions = {};
+            state.history = [];
+            saveDecisionsToStorage();
+            closeSourceModal();
+            switchTab('triage');
+            showToast('Sample triage deck restored', 'ph-arrows-clockwise text-sky-400');
+        }
+
+        // =========================================================================
+        // 6. GOOGLE PHOTOS PICKER API OAUTH 2.0 & DIRECT TOKEN WORKFLOW
+        // =========================================================================
+        function openSourceModal() {
+            const savedClientId = localStorage.getItem('snapcull_google_client_id');
+            if (savedClientId) {
+                document.getElementById('google-client-id').value = savedClientId;
+            }
+            const originEl = document.getElementById('current-origin-display');
+            if (originEl) originEl.textContent = window.location.origin;
+
+            const modal = document.getElementById('source-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeSourceModal() {
+            const modal = document.getElementById('source-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        function toggleOAuthHelp() {
+            document.getElementById('oauth-help-box').classList.toggle('hidden');
+        }
+
+        function toggleTokenFallback() {
+            document.getElementById('direct-token-box').classList.toggle('hidden');
+        }
+
+        function togglePrivacyModal() {
+            const modal = document.getElementById('privacy-modal');
+            modal.classList.toggle('hidden');
+            modal.classList.toggle('flex');
+        }
+
+        function markGoogleConnectedUI(labelText = 'Signed in • Ready to pick photos') {
+            const pill = document.getElementById('gphotos-status-pill');
+            pill.textContent = 'OAUTH CONNECTED';
+            pill.className = 'text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold';
+            document.getElementById('gphotos-subtext').textContent = labelText;
+            document.getElementById('source-subtitle').textContent = 'Google Photos • OAuth Live';
+            document.getElementById('source-icon').className = 'ph-fill ph-google-logo text-sky-400';
+        }
+
+        async function applyDirectGoogleToken() {
+            const token = document.getElementById('google-direct-token').value.trim();
+            if (!token) {
+                showToast('Paste a valid Google OAuth access token first', 'ph-warning text-amber-400');
+                return;
+            }
+            state.oauthAccessToken = token;
+            markGoogleConnectedUI('Bearer token active • Opening Picker...');
+            showToast('Google Photos token connected!', 'ph-google-logo text-emerald-400');
+            await launchGooglePhotosPickerSession(token);
+        }
+
+        function handleGooglePhotosAction() {
+            if (state.oauthAccessToken) {
+                launchGooglePhotosPickerSession(state.oauthAccessToken);
+            } else {
+                connectRealGooglePhotos();
+            }
+        }
+
+        function connectRealGooglePhotos() {
+            const clientId = document.getElementById('google-client-id').value.trim();
+            if (!clientId) {
+                document.getElementById('oauth-help-box').classList.remove('hidden');
+                showToast('Enter your Google OAuth 2.0 Client ID first', 'ph-warning text-amber-400');
+                return;
+            }
+            localStorage.setItem('snapcull_google_client_id', clientId);
+
+            if (!window.google || !google.accounts || !google.accounts.oauth2) {
+                document.getElementById('direct-token-box').classList.remove('hidden');
+                showToast('Google Identity SDK unavailable offline — use Direct Token or check internet', 'ph-info text-sky-400');
+                return;
+            }
+
+            try {
+                const tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: clientId,
+                    scope: 'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
+                    callback: async (tokenResponse) => {
+                        if (tokenResponse.error) {
+                            showToast(`OAuth Error: ${tokenResponse.error}`, 'ph-warning text-rose-400');
+                            return;
+                        }
+                        if (tokenResponse && tokenResponse.access_token) {
+                            state.oauthAccessToken = tokenResponse.access_token;
+                            markGoogleConnectedUI();
+                            showToast('Google account connected! Opening Picker...', 'ph-google-logo text-emerald-400');
+                            await launchGooglePhotosPickerSession(tokenResponse.access_token);
+                        }
+                    }
+                });
+
+                tokenClient.requestAccessToken({ prompt: state.oauthAccessToken ? '' : 'consent' });
+            } catch (err) {
+                document.getElementById('direct-token-box').classList.remove('hidden');
+                showToast(`Sign-In fallback enabled: ${err.message}`, 'ph-warning text-amber-400');
+            }
+        }
+
+        async function launchGooglePhotosPickerSession(accessToken) {
+            try {
+                const res = await fetch('https://photospicker.googleapis.com/v1/sessions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.error?.message || `HTTP ${res.status}`);
+                }
+
+                const session = await res.json();
+                if (session.pickerUri) {
+                    state.activePickerSession = {
+                        id: session.id,
+                        token: accessToken
+                    };
+
+                    window.open(session.pickerUri, '_blank', 'noopener');
+                    closeSourceModal();
+
+                    const banner = document.getElementById('picker-polling-banner');
+                    banner.classList.remove('hidden');
+                    startPickerSessionPolling();
+                }
+            } catch (err) {
+                console.error('Picker session error:', err);
+                showToast(`Picker Error: ${err.message}`, 'ph-warning text-rose-400');
+            }
+        }
+
+        function startPickerSessionPolling() {
+            clearInterval(state.pickerPollInterval);
+            state.pickerPollInterval = setInterval(() => {
+                pollActivePickerSession(false);
+            }, 3500);
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && state.activePickerSession) {
+                pollActivePickerSession(false);
+            }
+        });
+
+        async function pollActivePickerSession(manualTrigger = false) {
+            const session = state.activePickerSession;
+            if (!session) return;
+
+            try {
+                const res = await fetch(`https://photospicker.googleapis.com/v1/sessions/${session.id}`, {
+                    headers: { 'Authorization': `Bearer ${session.token}` }
+                });
+                if (!res.ok) return;
+
+                const data = await res.json();
+                if (data.mediaItemsSet) {
+                    clearInterval(state.pickerPollInterval);
+                    document.getElementById('picker-banner-text').textContent = 'Downloading selected Google Photos...';
+                    await fetchPickedGoogleMediaItems(session);
+                } else if (manualTrigger) {
+                    showToast('Finish selecting photos in the Google Photos tab first', 'ph-info text-sky-400');
+                }
+            } catch (err) {
+                console.warn('Polling check error:', err);
+            }
+        }
+
+        async function fetchPickedGoogleMediaItems(session) {
+            try {
+                let allItems = [];
+                let pageToken = '';
+
+                do {
+                    const url = new URL('https://photospicker.googleapis.com/v1/mediaItems');
+                    url.searchParams.set('sessionId', session.id);
+                    url.searchParams.set('pageSize', '50');
+                    if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+                    const res = await fetch(url.toString(), {
+                        headers: { 'Authorization': `Bearer ${session.token}` }
+                    });
+                    if (!res.ok) throw new Error(`Failed to fetch mediaItems (${res.status})`);
+
+                    const data = await res.json();
+                    if (data.mediaItems) allItems = allItems.concat(data.mediaItems);
+                    pageToken = data.nextPageToken || '';
+                } while (pageToken);
+
+                if (allItems.length === 0) {
+                    cancelPickerSession();
+                    showToast('No photos were selected in Google Photos', 'ph-info text-slate-300');
+                    return;
+                }
+
+                const importedPhotos = await Promise.all(allItems.map(async (item, idx) => {
+                    const mediaFile = item.mediaFile || {};
+                    const baseUrl = mediaFile.baseUrl || '';
+                    const width = mediaFile.mediaFileMetadata?.width || 1600;
+                    const height = mediaFile.mediaFileMetadata?.height || 1200;
+                    const filename = mediaFile.filename || `GooglePhoto_${idx + 1}.jpg`;
+                    const mimeType = mediaFile.mimeType || 'image/jpeg';
+
+                    const estSizeMB = Math.max(0.8, Number(((width * height * (mimeType.includes('png') ? 0.65 : 0.32)) / (1024 * 1024)).toFixed(1)));
+                    const isScreenshot = /screenshot|screen/i.test(filename) || (height / width > 2.05);
+                    const isLarge = estSizeMB > 5.0;
+
+                    let category = 'all';
+                    let badge = 'Google Photos Cloud';
+                    let badgeColor = 'bg-sky-500/90 text-slate-950';
+
+                    if (isScreenshot) {
+                        category = 'screenshots';
+                        badge = 'Screenshot Detected';
+                        badgeColor = 'bg-emerald-500/90 text-slate-950';
+                    } else if (isLarge) {
+                        category = 'large';
+                        badge = `Heavy File (${estSizeMB} MB)`;
+                        badgeColor = 'bg-sky-500/90 text-slate-950';
+                    }
+
+                    let objectUrl = 'https://placehold.co/800x1000/1e293b/94a3b8?text=Google+Photo';
+                    if (baseUrl) {
+                        try {
+                            const imgRes = await fetch(`${baseUrl}=w1080-h1440`, {
+                                headers: { 'Authorization': `Bearer ${session.token}` }
+                            });
+                            if (imgRes.ok) {
+                                const blob = await imgRes.blob();
+                                objectUrl = URL.createObjectURL(blob);
+                            }
+                        } catch (e) { /* Fallback to placeholder */ }
+                    }
+
+                    const createDate = item.createTime
+                        ? new Date(item.createTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+                        : 'Google Photos Library';
+
+                    return {
+                        id: `gp-live-${item.id || Date.now() + idx}`,
+                        title: filename,
+                        source: 'Google Photos',
+                        category,
+                        sharpness: 80,
+                        badge,
+                        badgeColor,
+                        sizeMB: estSizeMB,
+                        date: createDate,
+                        location: 'Google Photos Cloud',
+                        dimensions: `${width} × ${height}`,
+                        camera: `${mimeType.split('/')[1]?.toUpperCase() || 'IMAGE'} • Picker API`,
+                        aiScore: isLarge ? 'High storage impact in Google Account' : 'Imported via Google Photos Picker',
+                        url: objectUrl
+                    };
+                }));
+
+                state.photos = [...importedPhotos, ...state.photos];
+                cancelPickerSession();
+                setFilter('all');
+                showToast(`Imported ${importedPhotos.length} photos from Google Photos!`, 'ph-google-logo text-emerald-400');
+
+                fetch(`https://photospicker.googleapis.com/v1/sessions/${session.id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${session.token}` }
+                }).catch(() => {});
+            } catch (err) {
+                console.error('Error importing picked media:', err);
+                cancelPickerSession();
+                showToast('Could not import selected Google Photos', 'ph-warning text-rose-400');
+            }
+        }
+
+        function cancelPickerSession() {
+            clearInterval(state.pickerPollInterval);
+            state.activePickerSession = null;
+            document.getElementById('picker-polling-banner').classList.add('hidden');
+        }
+
+        // =========================================================================
+        // 7. LOCAL CAMERA ROLL & DESKTOP FOLDER IMPORT WITH BLUR ANALYSIS
+        // =========================================================================
+        async function analyzeImageOnDevice(objectUrl) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const width = img.naturalWidth || 1080;
+                    const height = img.naturalHeight || 1920;
+
+                    const canvas = document.createElement('canvas');
+                    const size = 128;
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, size, size);
+
+                    let sharpnessScore = 65;
+                    try {
+                        const data = ctx.getImageData(0, 0, size, size).data;
+                        let edgeSum = 0;
+                        let samples = 0;
+                        for (let y = 1; y < size - 1; y += 2) {
+                            for (let x = 1; x < size - 1; x += 2) {
+                                const idx = (y * size + x) * 4;
+                                const rightIdx = (y * size + (x + 1)) * 4;
+                                const downIdx = ((y + 1) * size + x) * 4;
+                                const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                                const lumR = 0.299 * data[rightIdx] + 0.587 * data[rightIdx + 1] + 0.114 * data[rightIdx + 2];
+                                const lumD = 0.299 * data[downIdx] + 0.587 * data[downIdx + 1] + 0.114 * data[downIdx + 2];
+                                edgeSum += Math.abs(lum - lumR) + Math.abs(lum - lumD);
+                                samples++;
+                            }
+                        }
+                        const avgEdge = edgeSum / Math.max(1, samples);
+                        sharpnessScore = Math.min(100, Math.round(avgEdge * 2.4));
+                    } catch (e) { /* Ignore canvas read errors */ }
+
+                    resolve({ width, height, sharpnessScore });
+                };
+                img.onerror = () => resolve({ width: 1080, height: 1920, sharpnessScore: 60 });
+                img.src = objectUrl;
+            });
+        }
+
+        async function handleLocalFilesUpload(event) {
+            const rawFiles = Array.from(event.target.files || []);
+            const files = rawFiles.filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(f.name));
+            if (files.length === 0) return;
+
+            const isFolderImport = Boolean(event.target.webkitdirectory && files[0]?.webkitRelativePath);
+            const folderName = isFolderImport ? files[0].webkitRelativePath.split('/')[0] : 'Device Camera Roll';
+
+            showToast(`Analyzing ${files.length} photo${files.length > 1 ? 's' : ''}...`, 'ph-cpu text-sky-400');
+
+            const newPhotos = await Promise.all(files.map(async (file, idx) => {
+                const objectUrl = URL.createObjectURL(file);
+                const sizeMB = Math.max(0.2, Number((file.size / (1024 * 1024)).toFixed(1)));
+                const { width, height, sharpnessScore } = await analyzeImageOnDevice(objectUrl);
+
+                const isScreenshot = /screenshot|screen/i.test(file.name) || (file.type === 'image/png' && height / width > 1.9);
+                const isBlurry = !isScreenshot && sharpnessScore < 26;
+                const isLarge = sizeMB > 5.0;
+
+                let category = 'all';
+                let badge = isFolderImport ? `Folder: ${folderName}` : 'Camera Roll';
+                let badgeColor = 'bg-slate-900/85 text-slate-200 border border-white/15';
+
+                if (isScreenshot) {
+                    category = 'screenshots';
+                    badge = 'Screenshot';
+                    badgeColor = 'bg-emerald-500/90 text-slate-950';
+                } else if (isBlurry) {
+                    category = 'blurry';
+                    badge = `Soft / Blurry (${sharpnessScore}/100)`;
+                    badgeColor = 'bg-amber-500/90 text-slate-950';
+                } else if (isLarge) {
+                    category = 'large';
+                    badge = `Heavy File (${sizeMB} MB)`;
+                    badgeColor = 'bg-sky-500/90 text-slate-950';
+                }
+
+                return {
+                    id: `local-${Date.now()}-${idx}`,
+                    title: file.name,
+                    source: isFolderImport ? `PC Folder (${folderName})` : 'Device Camera Roll',
+                    category,
+                    sharpness: sharpnessScore,
+                    badge,
+                    badgeColor,
+                    sizeMB,
+                    date: new Date(file.lastModified).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+                    location: isFolderImport ? (file.webkitRelativePath || folderName) : 'Local Device Storage',
+                    dimensions: `${width} × ${height}`,
+                    camera: file.type.replace('image/', '').toUpperCase() || 'LOCAL',
+                    aiScore: `On-Device Sharpness: ${sharpnessScore}/100`,
+                    url: objectUrl
+                };
+            }));
+
+            state.photos = [...newPhotos, ...state.photos];
+            document.getElementById('source-subtitle').textContent = isFolderImport ? `Folder: ${folderName} • Active` : 'Device Camera Roll • Active';
+            document.getElementById('source-icon').className = isFolderImport ? 'ph-fill ph-folder-open text-indigo-400' : 'ph-fill ph-device-mobile text-emerald-400';
+
+            closeSourceModal();
+            setFilter('all');
+            showToast(`Loaded ${newPhotos.length} photos from ${folderName}`, 'ph-check-circle text-emerald-400');
+            event.target.value = '';
+        }
+
+        // =========================================================================
+        // 8. EXIF INSPECTOR, STORAGE & ANDROID PWA SHELL
+        // =========================================================================
+        function toggleExifModal() {
+            const modal = document.getElementById('exif-modal');
+            const pending = getPendingQueue();
+
+            if (modal.classList.contains('hidden')) {
+                if (pending.length === 0) return;
+                const p = pending[0];
+                document.getElementById('exif-content').innerHTML = `
+                    <div class="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
+                        <div class="flex justify-between"><span class="text-slate-400">Filename</span><span class="text-white font-medium truncate max-w-[200px]">${p.title}</span></div>
+                        <div class="flex justify-between"><span class="text-slate-400">Source</span><span class="text-sky-400 font-medium">${p.source}</span></div>
+                        <div class="flex justify-between"><span class="text-slate-400">File Size</span><span class="text-emerald-400 font-semibold">${p.sizeMB.toFixed(1)} MB</span></div>
+                        <div class="flex justify-between"><span class="text-slate-400">Resolution</span><span class="text-white">${p.dimensions}</span></div>
+                        <div class="flex justify-between"><span class="text-slate-400">Captured</span><span class="text-white">${p.date}</span></div>
+                        <div class="flex justify-between"><span class="text-slate-400">Location / Path</span><span class="text-white truncate max-w-[200px]">${p.location}</span></div>
+                        <div class="flex justify-between"><span class="text-slate-400">Format / Camera</span><span class="text-slate-200">${p.camera}</span></div>
+                    </div>
+                    <div class="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-300 flex items-center gap-2.5">
+                        <i class="ph-fill ph-sparkle text-lg shrink-0"></i>
+                        <span><strong>Triage Note:</strong> ${p.aiScore}</span>
+                    </div>
+                `;
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            } else {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+        }
+
+        function saveDecisionsToStorage() {
+            try {
+                localStorage.setItem('snapcull_decisions_v2', JSON.stringify(state.decisions));
+            } catch (e) { /* Ignore quota errors */ }
+        }
+
+        function loadDecisionsFromStorage() {
+            try {
+                const raw = localStorage.getItem('snapcull_decisions_v2');
+                if (raw) state.decisions = JSON.parse(raw);
+            } catch (e) { /* Ignore parse errors */ }
+        }
+
+        function showToast(message, iconClass = 'ph-check-circle text-emerald-400') {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-message').textContent = message;
+            document.getElementById('toast-icon').className = `ph-fill ${iconClass} text-base`;
+
+            toast.classList.remove('opacity-0', '-translate-y-2');
+            toast.classList.add('opacity-100', 'translate-y-0');
+
+            clearTimeout(window._toastTimer);
+            window._toastTimer = setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', '-translate-y-2');
+            }, 2600);
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+
+            if (e.key === 'Escape') {
+                closeSourceModal();
+                document.getElementById('exif-modal').classList.add('hidden');
+                document.getElementById('exif-modal').classList.remove('flex');
+                document.getElementById('privacy-modal').classList.add('hidden');
+                document.getElementById('privacy-modal').classList.remove('flex');
+                return;
+            }
+
+            if (state.currentTab !== 'triage') return;
+
+            if (e.key === 'ArrowLeft') { e.preventDefault(); triggerSwipe('left'); }
+            if (e.key === 'ArrowRight') { e.preventDefault(); triggerSwipe('right'); }
+            if (e.key === 'ArrowUp') { e.preventDefault(); triggerSwipe('up'); }
+            if (e.key.toLowerCase() === 'z') { e.preventDefault(); undoLastAction(); }
+            if (e.key.toLowerCase() === 'i') { e.preventDefault(); toggleExifModal(); }
+        });
+
+        let deferredInstallPrompt = null;
+
+        function initAndroidAppShell() {
+            const manifest = {
+                name: 'SnapCull — Photo Triage & Culling',
+                short_name: 'SnapCull',
+                description: 'Swipe-based photo triage and storage cleaner for Android and Google Photos.',
+                start_url: window.location.href,
+                display: 'standalone',
+                orientation: 'portrait',
+                background_color: '#020617',
+                theme_color: '#020617',
+                icons: [
+                    {
+                        src: 'https://placehold.co/192x192/0ea5e9/ffffff.png?text=SC',
+                        sizes: '192x192',
+                        type: 'image/png',
+                        purpose: 'any maskable'
+                    },
+                    {
+                        src: 'https://placehold.co/512x512/0ea5e9/ffffff.png?text=SnapCull',
+                        sizes: '512x512',
+                        type: 'image/png',
+                        purpose: 'any maskable'
+                    }
+                ]
+            };
+            const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+            const manifestLink = document.createElement('link');
+            manifestLink.rel = 'manifest';
+            manifestLink.href = URL.createObjectURL(manifestBlob);
+            document.head.appendChild(manifestLink);
+
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredInstallPrompt = e;
+                const installBtn = document.getElementById('btn-install-apk');
+                if (installBtn) {
+                    installBtn.classList.remove('hidden');
+                    installBtn.classList.add('flex');
+                }
+            });
+        }
+
+        async function triggerAndroidInstall() {
+            if (deferredInstallPrompt) {
+                deferredInstallPrompt.prompt();
+                const { outcome } = await deferredInstallPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    showToast('Installing SnapCull Android WebAPK...', 'ph-android-logo text-emerald-400');
+                }
+                deferredInstallPrompt = null;
+                document.getElementById('btn-install-apk')?.classList.add('hidden');
+            } else {
+                showToast('In Chrome Android: tap ⋮ Menu → "Add to Home screen" to install', 'ph-android-logo text-sky-400');
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadDecisionsFromStorage();
+            initAndroidAppShell();
+            renderCardStack();
+        });
+    </script>
+</body>
+</html>
